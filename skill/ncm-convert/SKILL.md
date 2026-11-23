@@ -24,12 +24,20 @@ checked against real files.
 # Archive: bit-exact export, no encoder involved
 ncmconv -o <dir> <files-or-dirs>
 
+# Archive with usable tags: audio copied, only the container rewritten
+ncmconv -tag -o <dir> <files-or-dirs>
+
 # Upload to an LLM or hand to someone: 320 kbps mp3
 ncmconv -format mp3 -b 320k -o <dir> <files-or-dirs>
 
 # Recursive batch that leaves a machine-readable record
 ncmconv -r -format mp3 -manifest <dir>/manifest.json -o <dir> <music-dir>
 ```
+
+`-tag` matters for a music library: without it the export is the raw payload,
+which often carries no title, artist or cover at all. It remuxes with stream
+copy, so the audio is still untouched — offer it whenever the result is going
+into a player rather than into an analyser.
 
 Choose the format from the intent, not from convenience:
 

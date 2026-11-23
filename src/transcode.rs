@@ -27,11 +27,15 @@ pub struct Request<'a> {
     pub info: &'a AudioInfo,
     pub meta: Option<&'a Meta>,
     pub cover: &'a [u8],
+    /// Remux instead of encoding: the audio stream is copied, so only the
+    /// container is rewritten. Used to attach tags and a cover without paying a
+    /// generation loss.
+    pub copy: bool,
 }
 
 impl Request<'_> {
     fn embeds_cover(&self) -> bool {
-        !self.cover.is_empty() && (self.format == "mp3" || self.format == "flac")
+        !self.cover.is_empty() && matches!(self.format, "mp3" | "flac" | "m4a" | "mp4")
     }
 }
 
@@ -80,6 +84,19 @@ pub fn ffmpeg_args(req: &Request, cover_path: Option<&Path>) -> Vec<String> {
         }
     }
 
+    if req.copy {
+        // Container only: the audio stream is byte-identical afterwards.
+        args.push("-c:a".into());
+        args.push("copy".into());
+        if req.format == "mp3" {
+            args.push("-id3v2_version".into());
+            args.push("3".into());
+        }
+        args.extend(metadata_args(req.meta));
+        args.push(req.output.to_string_lossy().into_owned());
+        return args;
+    }
+
     match req.format {
         "mp3" => {
             args.push("-c:a".into());
@@ -121,20 +138,26 @@ pub fn ffmpeg_args(req: &Request, cover_path: Option<&Path>) -> Vec<String> {
         _ => {}
     }
 
-    if let Some(meta) = req.meta {
-        for (key, value) in [
-            ("title", meta.name.as_str()),
-            ("artist", meta.artist.as_str()),
-            ("album", meta.album.as_str()),
-        ] {
-            if !value.is_empty() {
-                args.push("-metadata".into());
-                args.push(format!("{key}={value}"));
-            }
+    args.extend(metadata_args(req.meta));
+    args.push(req.output.to_string_lossy().into_owned());
+    args
+}
+
+fn metadata_args(meta: Option<&Meta>) -> Vec<String> {
+    let Some(meta) = meta else {
+        return Vec::new();
+    };
+    let mut args = Vec::new();
+    for (key, value) in [
+        ("title", meta.name.as_str()),
+        ("artist", meta.artist.as_str()),
+        ("album", meta.album.as_str()),
+    ] {
+        if !value.is_empty() {
+            args.push("-metadata".into());
+            args.push(format!("{key}={value}"));
         }
     }
-
-    args.push(req.output.to_string_lossy().into_owned());
     args
 }
 

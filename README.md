@@ -58,6 +58,7 @@ ncmconv [options] <file-or-dir>...
 | `-r` | off | recurse into subdirectories |
 | `-j N` | CPU count | parallel workers |
 | `-overwrite` | off | replace existing outputs (otherwise skip) |
+| `-tag` | off | rewrite the container to attach tags and cover art, audio copied as-is |
 | `-manifest PATH` | none | also write a JSON manifest |
 | `-version` | | print version |
 
@@ -72,10 +73,12 @@ Behaviour that is guaranteed, not incidental:
 - **Exit codes:** `0` all good, `1` at least one file failed, `2` bad arguments.
 - **Loud about pointless work.** Re-encoding an already-lossy payload warns;
   ignoring `-b` because the target equals the payload format says so.
-- **Metadata and cover art** from the container are written into transcoded
-  `mp3` and `flac` output. `m4a`/`mp4` get the tags but not the cover, and the
-  bit-exact path deliberately injects neither — that would stop it being
-  bit-exact.
+- **Metadata and cover art** from the container are written into every
+  transcoded target that has a cover slot: `mp3`, `flac`, `m4a`, `mp4`.
+- **`-tag` keeps the audio and rewrites only the container.** It uses ffmpeg's
+  stream copy, so a decoded comparison of input and output is identical; the
+  difference is a real ID3/Vorbis tag block plus the cover instead of the bare
+  payload the player shipped. Without `-tag` the export stays byte-exact.
 
 ## Architecture
 
@@ -138,13 +141,16 @@ flowchart TD
     Requested -->|"explicit"| Target2["target = requested format"]
     Target1 --> Same{"target equals payload?"}
     Target2 --> Same
-    Same -->|"yes"| Copy["bit-exact copy<br/>no encoder involved"]
+    Same -->|"yes"| Tag{"-tag and tags to write?"}
+    Tag -->|"no"| Copy["bit-exact copy<br/>no encoder involved"]
+    Tag -->|"yes"| Remux["remux -c copy<br/>tag block only"]
     Same -->|"no"| Probed{"ffprobe readable?"}
     Probed -->|"no"| Warn["warn, use encoder defaults"]
     Probed -->|"yes"| Use["take depth and sample rate"]
     Warn --> Encode["ffmpeg encode"]
     Use --> Encode
     Copy --> Done["output file"]
+    Remux --> Done
     Encode --> Done
 ```
 
@@ -167,7 +173,14 @@ sequenceDiagram
         NCM->>NCM: unwrap key, build 256-byte period
         NCM-->>Pool: payload format, metadata, cover
         alt target equals payload format
-            Pool->>Disk: write payload byte for byte
+            alt -tag and the container has tags or art
+                Pool->>Disk: stage decrypted temp file
+                Pool->>FF: remux with -c copy
+                FF->>Disk: output file with tags and cover
+                Pool->>Disk: remove temp file
+            else plain export
+                Pool->>Disk: write payload byte for byte
+            end
         else target differs
             Pool->>Disk: stage decrypted temp file
             Pool->>FF: ffprobe depth and rate
@@ -249,8 +262,8 @@ The decryptor is not "probably right":
 - The container parser is verified against 18 real MP3-payload files and against
   a synthetic FLAC container. A real NetEase FLAC download has not been run
   through it yet; the code path is identical, but the container bytes are not.
-- `-format` equal to the payload format always copies, so there is no way to
-  force a re-encode at a different bitrate.
+- `-format` equal to the payload format copies unless `-tag` is given, so there
+  is still no way to force a re-encode at a different bitrate.
 - Lossy targets clamp anything above 48 kHz automatically; the rate cannot be
   set explicitly.
 - Release binaries are unsigned, so macOS Gatekeeper quarantines the download.

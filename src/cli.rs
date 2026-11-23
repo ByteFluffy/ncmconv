@@ -33,6 +33,8 @@ pub struct Options {
     pub recursive: bool,
     pub jobs: usize,
     pub overwrite: bool,
+    /// Rewrite the container to attach tags and cover art, audio untouched.
+    pub tag: bool,
     pub manifest: Option<PathBuf>,
     /// Flags the user actually set, so behaviour that ignores one can say so.
     explicit: HashSet<String>,
@@ -49,6 +51,7 @@ impl Default for Options {
                 .map(|n| n.get())
                 .unwrap_or(4),
             overwrite: false,
+            tag: false,
             manifest: None,
             explicit: HashSet::new(),
         }
@@ -145,7 +148,7 @@ pub fn main() -> i32 {
         return 2;
     }
 
-    let tools = if options.format == "original" {
+    let tools = if options.format == "original" && !options.tag {
         None
     } else {
         match (which("ffmpeg"), which("ffprobe")) {
@@ -255,7 +258,17 @@ fn process(
 
     // Same container as the payload: stream it out untouched, never touching an
     // encoder. This is the lossless path.
-    if target == from {
+    // Tagging only has anything to do when the container carries tags or art;
+    // otherwise the byte-exact copy stays the cheapest correct answer.
+    let taggable = decoder
+        .meta
+        .as_ref()
+        .map(|m| !m.name.is_empty() || !m.artist.is_empty() || !m.album.is_empty())
+        .unwrap_or(false)
+        || !decoder.cover.is_empty();
+    let remux = options.tag && target == from && taggable;
+
+    if target == from && !remux {
         if options.explicit.contains("b") {
             eprintln!(
                 "[note] {}: payload is already {target}, copied bit-exactly; -b ignored",
@@ -272,7 +285,11 @@ fn process(
     let tools = match tools {
         Some(tools) => tools,
         None => {
-            entry.error = Some("ffmpeg is required to change format".into());
+            entry.error = Some(if remux {
+                "ffmpeg is required to write tags (-tag)".into()
+            } else {
+                "ffmpeg is required to change format".into()
+            });
             return entry;
         }
     };
@@ -283,6 +300,26 @@ fn process(
             return entry;
         }
     };
+    if remux {
+        let request = Request {
+            input: &staged,
+            output: &output,
+            format: &target,
+            bitrate: &options.bitrate,
+            info: &AudioInfo::default(),
+            meta: meta.as_ref(),
+            cover: &decoder.cover,
+            copy: true,
+        };
+        let result = transcode::run(&tools.ffmpeg, &request);
+        let _ = std::fs::remove_file(&staged);
+        match result {
+            Ok(()) => entry.size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0),
+            Err(error) => entry.error = Some(error),
+        }
+        return entry;
+    }
+
     let info = match transcode::probe(&tools.ffprobe, &staged) {
         Ok(info) => info,
         Err(error) => {
@@ -308,6 +345,7 @@ fn process(
         info: &info,
         meta: meta.as_ref(),
         cover: &decoder.cover,
+        copy: false,
     };
     let result = transcode::run(&tools.ffmpeg, &request);
     let _ = std::fs::remove_file(&staged);
@@ -560,6 +598,7 @@ fn parse_args(argv: &[String]) -> Result<(Options, Vec<String>), String> {
             }
             "r" | "recursive" => options.recursive = true,
             "overwrite" => options.overwrite = true,
+            "tag" => options.tag = true,
             other => {
                 return Err(format!(
                     "unknown flag -{other} (try -h for the list of flags)"
@@ -592,6 +631,7 @@ Options:
   -r              recurse into directories
   -j N            parallel workers (default: CPU count)
   -overwrite      replace existing output files
+  -tag            attach tags and cover art without re-encoding (remux)
   -manifest PATH  also write a JSON manifest
   -version        print version
 
@@ -743,6 +783,40 @@ mod tests {
         path
     }
 
+    /// Decodes to raw PCM so two files can be compared for audio identity.
+    fn pcm(path: &Path) -> Vec<u8> {
+        let output = Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(path)
+            .args(["-map", "0:a:0", "-f", "s16le", "-"])
+            .output()
+            .expect("ffmpeg decode");
+        assert!(
+            output.status.success(),
+            "decode failed for {}",
+            path.display()
+        );
+        output.stdout
+    }
+
+    fn has_attached_picture(path: &Path) -> bool {
+        let output = Command::new(which("ffprobe").unwrap())
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v",
+                "-show_entries",
+                "stream_disposition=attached_pic",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(path)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).trim() == "1"
+    }
+
     fn fresh_claims() -> Mutex<HashSet<PathBuf>> {
         Mutex::new(HashSet::new())
     }
@@ -854,34 +928,80 @@ mod tests {
     }
 
     #[test]
-    fn mp3_target_embeds_cover() {
+    fn targets_with_a_cover_slot_get_the_cover() {
         if !has_ffmpeg() {
             return;
         }
         let dir = temp_dir("cover");
         let flac = synth(&dir, "flac");
+        let mp3 = synth(&dir, "mp3");
         let png = cover_png(&dir);
-        let ncm = write_ncm(&dir, "a.ncm", &flac, &png, 0);
-        let out = temp_dir("cover-out");
-        let entry = process(&ncm, &options("mp3", &out), Some(&tools()), &fresh_claims());
+        let flac_ncm = write_ncm(&dir, "a.ncm", &flac, &png, 0);
+        // A FLAC target needs a source that will actually be encoded: a FLAC
+        // payload would take the bit-exact copy path, which never reads the
+        // container's cover frame.
+        let mp3_ncm = write_ncm(&dir, "b.ncm", &mp3, &png, 0);
+
+        for (format, source) in [
+            ("mp3", &flac_ncm),
+            ("flac", &mp3_ncm),
+            ("m4a", &flac_ncm),
+            ("mp4", &flac_ncm),
+        ] {
+            let out = temp_dir(&format!("cover-out-{format}"));
+            let entry = process(
+                source,
+                &options(format, &out),
+                Some(&tools()),
+                &fresh_claims(),
+            );
+            assert!(entry.error.is_none(), "{format}: {:?}", entry.error);
+            assert!(
+                has_attached_picture(Path::new(&entry.output)),
+                "{format} dropped the cover"
+            );
+        }
+    }
+
+    #[test]
+    fn tag_remux_keeps_the_audio_and_adds_metadata() {
+        if !has_ffmpeg() {
+            return;
+        }
+        let dir = temp_dir("tag");
+        let mp3 = synth(&dir, "mp3");
+        let png = cover_png(&dir);
+        let ncm = write_ncm(&dir, "t.ncm", &mp3, &png, 0);
+        let out = temp_dir("tag-out");
+
+        let mut options = options("original", &out);
+        options.tag = true;
+        let entry = process(&ncm, &options, Some(&tools()), &fresh_claims());
         assert!(entry.error.is_none(), "{:?}", entry.error);
 
-        let ffprobe = which("ffprobe").unwrap();
-        let output = Command::new(ffprobe)
+        assert_eq!(
+            pcm(&dir.join("fixture.mp3")),
+            pcm(Path::new(&entry.output)),
+            "-tag must remux, never re-encode"
+        );
+        assert!(has_attached_picture(Path::new(&entry.output)));
+
+        let tags = Command::new(which("ffprobe").unwrap())
             .args([
                 "-v",
                 "error",
-                "-select_streams",
-                "v",
                 "-show_entries",
-                "stream_disposition=attached_pic",
+                "format_tags=title,artist,album",
                 "-of",
-                "csv=p=0",
+                "default=nw=1",
             ])
             .arg(&entry.output)
             .output()
             .unwrap();
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+        let tags = String::from_utf8_lossy(&tags.stdout);
+        assert!(tags.contains("title=Tone"), "{tags}");
+        assert!(tags.contains("artist=Tester"), "{tags}");
+        assert!(tags.contains("album=Fixtures"), "{tags}");
     }
 
     #[test]
