@@ -21,6 +21,9 @@ checked against real files.
 ## Commands
 
 ```sh
+# Look before converting: payload format, duration, tags, cover
+ncmconv -info <files-or-dirs>
+
 # Archive: bit-exact export, no encoder involved
 ncmconv -o <dir> <files-or-dirs>
 
@@ -38,6 +41,9 @@ ncmconv -r -format mp3 -manifest <dir>/manifest.json -o <dir> <music-dir>
 which often carries no title, artist or cover at all. It remuxes with stream
 copy, so the audio is still untouched — offer it whenever the result is going
 into a player rather than into an analyser.
+
+Run `-info` first when the user is unsure what they have: it reports the payload
+container, duration, tags and whether a cover exists, and writes nothing.
 
 Choose the format from the intent, not from convenience:
 

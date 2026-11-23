@@ -35,6 +35,8 @@ pub struct Options {
     pub overwrite: bool,
     /// Rewrite the container to attach tags and cover art, audio untouched.
     pub tag: bool,
+    /// Report what the container holds and exit without converting.
+    pub info: bool,
     pub manifest: Option<PathBuf>,
     /// Flags the user actually set, so behaviour that ignores one can say so.
     explicit: HashSet<String>,
@@ -52,6 +54,7 @@ impl Default for Options {
                 .unwrap_or(4),
             overwrite: false,
             tag: false,
+            info: false,
             manifest: None,
             explicit: HashSet::new(),
         }
@@ -146,6 +149,10 @@ pub fn main() -> i32 {
     if files.is_empty() {
         eprintln!("error: no .ncm files found");
         return 2;
+    }
+
+    if options.info {
+        return inspect_all(&files);
     }
 
     let tools = if options.format == "original" && !options.tag {
@@ -448,20 +455,88 @@ fn collect(inputs: &[String], recursive: bool) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
+/// Answers the question the CLI otherwise hides: what is actually inside.
+fn inspect_all(files: &[PathBuf]) -> i32 {
+    let mut failed = 0;
+    for path in files {
+        match inspect(path) {
+            Ok(line) => println!("{line}"),
+            Err(error) => {
+                eprintln!("[fail] {}: {error}", file_name(path));
+                failed += 1;
+            }
+        }
+    }
+    if failed > 0 {
+        1
+    } else {
+        0
+    }
+}
+
+fn inspect(path: &Path) -> Result<String, String> {
+    let mut decoder = Decoder::open(path).map_err(|e| e.to_string())?;
+    let format = decoder.format().map_err(|e| e.to_string())?.to_string();
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+    let mut parts = vec![format!("[{format:<4}]"), file_name(path)];
+    if let Some(meta) = &decoder.meta {
+        parts.push(clock(meta.duration_seconds()));
+        let label = if meta.artist.is_empty() {
+            meta.name.clone()
+        } else {
+            format!("{} — {}", meta.artist, meta.name)
+        };
+        if !label.trim().is_empty() {
+            parts.push(label);
+        }
+    }
+    parts.push(format!(
+        "({}, {})",
+        human_bytes(size),
+        if decoder.cover.is_empty() {
+            "no cover"
+        } else {
+            "with cover"
+        }
+    ));
+    Ok(parts.join("  "))
+}
+
+fn clock(seconds: u64) -> String {
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn is_ncm(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.eq_ignore_ascii_case("ncm"))
+        .unwrap_or(false)
+}
+
 fn walk(dir: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
-        if path.is_dir() {
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+
+        if file_type.is_symlink() {
+            // A symlinked directory can point back at an ancestor, which would
+            // recurse forever; symlinked files are still worth converting.
+            if std::fs::metadata(&path)
+                .map(|m| m.is_file())
+                .unwrap_or(false)
+                && is_ncm(&path)
+            {
+                files.push(path);
+            }
+            continue;
+        }
+        if file_type.is_dir() {
             if recursive {
                 walk(&path, recursive, files)?;
             }
-        } else if path
-            .extension()
-            .map(|e| e.eq_ignore_ascii_case("ncm"))
-            .unwrap_or(false)
-        {
+        } else if is_ncm(&path) {
             files.push(path);
         }
     }
@@ -599,6 +674,7 @@ fn parse_args(argv: &[String]) -> Result<(Options, Vec<String>), String> {
             "r" | "recursive" => options.recursive = true,
             "overwrite" => options.overwrite = true,
             "tag" => options.tag = true,
+            "info" => options.info = true,
             other => {
                 return Err(format!(
                     "unknown flag -{other} (try -h for the list of flags)"
@@ -632,6 +708,7 @@ Options:
   -j N            parallel workers (default: CPU count)
   -overwrite      replace existing output files
   -tag            attach tags and cover art without re-encoding (remux)
+  -info           print what each container holds, convert nothing
   -manifest PATH  also write a JSON manifest
   -version        print version
 
@@ -1060,6 +1137,47 @@ mod tests {
         for entry in &results {
             assert!(entry.error.is_none(), "{:?}", entry.error);
             assert_eq!(entry.to, "mp3");
+        }
+    }
+
+    #[test]
+    fn inspect_reports_without_converting() {
+        let dir = temp_dir("inspect");
+        let payload = fake_payload(b"fLaC\x00\x00\x00\x22");
+        let ncm = write_ncm(&dir, "i.ncm", &payload, &[], 0);
+
+        let line = inspect(&ncm).expect("inspect");
+        assert!(line.contains("flac"), "{line}");
+        assert!(line.contains("Tester"), "{line}");
+        assert!(line.contains("no cover"), "{line}");
+        assert!(line.contains("0:02"), "{line}");
+
+        let produced: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".flac"))
+            .collect();
+        assert!(produced.is_empty(), "-info must not write: {produced:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_follows_file_links_but_not_directory_links() {
+        let dir = temp_dir("walk");
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(dir.join("a.ncm"), b"x").unwrap();
+        std::fs::write(sub.join("b.ncm"), b"x").unwrap();
+        std::os::unix::fs::symlink(sub.join("b.ncm"), dir.join("linked.ncm")).unwrap();
+        // A directory link back to the parent would recurse forever.
+        std::os::unix::fs::symlink(dir.clone(), sub.join("loop")).unwrap();
+
+        let files = collect(&[dir.display().to_string()], true).expect("walk must terminate");
+        let names: Vec<String> = files.iter().map(|path| file_name(path)).collect();
+        assert_eq!(names.len(), 3, "{names:?}");
+        for expected in ["a.ncm", "b.ncm", "linked.ncm"] {
+            assert!(names.contains(&expected.to_string()), "{names:?}");
         }
     }
 

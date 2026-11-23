@@ -59,6 +59,7 @@ ncmconv [options] <file-or-dir>...
 | `-j N` | CPU count | parallel workers |
 | `-overwrite` | off | replace existing outputs (otherwise skip) |
 | `-tag` | off | rewrite the container to attach tags and cover art, audio copied as-is |
+| `-info` | off | print what each container holds and convert nothing |
 | `-manifest PATH` | none | also write a JSON manifest |
 | `-version` | | print version |
 
@@ -79,6 +80,25 @@ Behaviour that is guaranteed, not incidental:
   stream copy, so a decoded comparison of input and output is identical; the
   difference is a real ID3/Vorbis tag block plus the cover instead of the bare
   payload the player shipped. Without `-tag` the export stays byte-exact.
+
+## Recipes
+
+```sh
+# what is actually inside these files, before picking a format
+ncmconv -info ~/Music/网易云音乐/*.ncm
+
+# archive with tags the player will show
+ncmconv -tag -o ~/archive ~/Music/网易云音乐
+
+# small enough to upload, good enough to analyse
+ncmconv -format mp3 -b 320k -o ~/upload ~/Music/网易云音乐
+
+# a colleague gets the files and a record of what was produced
+ncmconv -r -tag -manifest out/manifest.json -o out ~/Music/网易云音乐
+
+# PCM for an editor that refuses compressed input
+ncmconv -format wav -o ~/edit hi-res.ncm
+```
 
 ## Architecture
 
