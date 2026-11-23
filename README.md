@@ -73,8 +73,9 @@ Behaviour that is guaranteed, not incidental:
 - **Loud about pointless work.** Re-encoding an already-lossy payload warns;
   ignoring `-b` because the target equals the payload format says so.
 - **Metadata and cover art** from the container are written into transcoded
-  output. The bit-exact path deliberately does not inject them — that would
-  stop it being bit-exact.
+  `mp3` and `flac` output. `m4a`/`mp4` get the tags but not the cover, and the
+  bit-exact path deliberately injects neither — that would stop it being
+  bit-exact.
 
 ## Architecture
 
@@ -147,6 +148,18 @@ The decryptor is not "probably right":
   format plus cover embedding.
 - `cargo test --release bench_decrypt -- --ignored --nocapture` reproduces the
   throughput numbers above.
+
+## Known limitations
+
+- The container parser is verified against 18 real MP3-payload files and against
+  a synthetic FLAC container. A real NetEase FLAC download has not been run
+  through it yet; the code path is identical, but the container bytes are not.
+- `-format` equal to the payload format always copies, so there is no way to
+  force a re-encode at a different bitrate.
+- Lossy targets clamp anything above 48 kHz automatically; the rate cannot be
+  set explicitly.
+- Release binaries are unsigned, so macOS Gatekeeper quarantines the download.
+- No checksums are published with the release artifacts.
 
 ## Legal
 
