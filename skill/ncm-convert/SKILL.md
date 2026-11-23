@@ -66,7 +66,9 @@ larger with zero additional information, and only justified for PCM-only tools.
   directory, and quote at most a couple of rows.
 - **Flag pointless work instead of silently performing it.** If the source is
   already lossy and the user asks for the same lossy family, say that
-  re-encoding cannot add detail and offer the bit-exact copy.
+  re-encoding cannot add detail and offer the bit-exact copy. `-force` is the
+  escape hatch when they genuinely want a re-encode anyway (one bitrate for a
+  whole library, for example).
 
 ## Install
 
