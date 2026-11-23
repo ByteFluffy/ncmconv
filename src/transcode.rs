@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ncm::Meta;
 
@@ -32,35 +33,41 @@ impl Request<'_> {
     fn embeds_cover(&self) -> bool {
         !self.cover.is_empty() && (self.format == "mp3" || self.format == "flac")
     }
+}
 
-    pub fn cover_path(&self) -> PathBuf {
-        let ext = if self.cover.starts_with(b"\x89PNG") {
-            "png"
-        } else {
-            "jpg"
-        };
-        std::env::temp_dir().join(format!("ncmconv-cover-{}.{ext}", self.cover.len()))
-    }
+/// Naming a cover file after its size alone made concurrent conversions of
+/// covers with equal length share one path, and the first finished worker
+/// deleted the file the others were still reading.
+static COVER_SEQ: AtomicU64 = AtomicU64::new(0);
+
+pub fn cover_temp_path(cover: &[u8]) -> PathBuf {
+    let seq = COVER_SEQ.fetch_add(1, Ordering::Relaxed);
+    let ext = if cover.starts_with(b"\x89PNG") {
+        "png"
+    } else {
+        "jpg"
+    };
+    std::env::temp_dir().join(format!("ncmconv-cover-{}-{seq}.{ext}", std::process::id()))
 }
 
 /// Builds the argument vector. Every value is a separate argv entry, so no shell
 /// quoting is involved and titles may contain anything.
-pub fn ffmpeg_args(req: &Request) -> Vec<String> {
+pub fn ffmpeg_args(req: &Request, cover_path: Option<&Path>) -> Vec<String> {
     let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-y", "-i"]
         .iter()
         .map(|s| s.to_string())
         .collect();
     args.push(req.input.to_string_lossy().into_owned());
 
-    let cover = req.embeds_cover();
-    if cover {
+    let cover = cover_path.filter(|_| req.embeds_cover());
+    if let Some(path) = &cover {
         args.push("-i".into());
-        args.push(req.cover_path().to_string_lossy().into_owned());
+        args.push(path.to_string_lossy().into_owned());
     }
 
     args.push("-map".into());
     args.push("0:a:0".into());
-    if cover {
+    if cover.is_some() {
         for extra in [
             "-map",
             "1:v:0",
@@ -194,7 +201,7 @@ pub fn probe(ffprobe: &str, path: &Path) -> Result<AudioInfo, String> {
 
 pub fn run(ffmpeg: &str, req: &Request) -> Result<(), String> {
     let cover_path = if req.embeds_cover() {
-        let path = req.cover_path();
+        let path = cover_temp_path(req.cover);
         std::fs::write(&path, req.cover).map_err(|e| format!("write cover: {e}"))?;
         Some(path)
     } else {
@@ -202,7 +209,7 @@ pub fn run(ffmpeg: &str, req: &Request) -> Result<(), String> {
     };
 
     let result = Command::new(ffmpeg)
-        .args(ffmpeg_args(req))
+        .args(ffmpeg_args(req, cover_path.as_deref()))
         .output()
         .map_err(|e| format!("ffmpeg: {e}"));
 

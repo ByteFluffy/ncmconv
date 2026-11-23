@@ -900,6 +900,50 @@ mod tests {
     }
 
     #[test]
+    fn cover_paths_do_not_collide() {
+        let cover = vec![0u8; 128];
+        let first = transcode::cover_temp_path(&cover);
+        let second = transcode::cover_temp_path(&cover);
+        assert_ne!(first, second, "same-length covers must not share a file");
+    }
+
+    #[test]
+    fn parallel_conversions_with_cover_do_not_interfere() {
+        if !has_ffmpeg() {
+            return;
+        }
+        let dir = temp_dir("parallel");
+        let flac = synth(&dir, "flac");
+        let png = cover_png(&dir);
+        let ncm = write_ncm(&dir, "p.ncm", &flac, &png, 0);
+
+        let mut results = Vec::new();
+        std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for index in 0..4 {
+                let source = ncm.clone();
+                handles.push(scope.spawn(move || {
+                    let out = temp_dir(&format!("parallel-{index}"));
+                    process(
+                        &source,
+                        &options("mp3", &out),
+                        Some(&tools()),
+                        &fresh_claims(),
+                    )
+                }));
+            }
+            for handle in handles {
+                results.push(handle.join().expect("worker panicked"));
+            }
+        });
+
+        for entry in &results {
+            assert!(entry.error.is_none(), "{:?}", entry.error);
+            assert_eq!(entry.to, "mp3");
+        }
+    }
+
+    #[test]
     fn rejects_foreign_file() {
         let dir = temp_dir("foreign");
         let path = dir.join("fake.ncm");
