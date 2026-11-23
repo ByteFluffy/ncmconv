@@ -40,6 +40,18 @@ Or from a checkout:
 cargo build --release && cp target/release/ncmconv ~/.local/bin/
 ```
 
+Downloaded binaries arrive quarantined on macOS; clear the flag once:
+
+```sh
+xattr -d com.apple.quarantine ~/.local/bin/ncmconv
+```
+
+Release archives also ship with `checksums.txt`:
+
+```sh
+shasum -a 256 -c checksums.txt --ignore-missing
+```
+
 Format conversion needs `ffmpeg` and `ffprobe` on `PATH`
 (`brew install ffmpeg`). The default `-format original` mode never touches them,
 so a decrypt-only build has no runtime dependencies at all.

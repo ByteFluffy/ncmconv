@@ -54,3 +54,19 @@ jobs:
           files: |
             ncmconv-*.tar.gz
             ncmconv-*.zip
+
+  # Runs after every artifact exists, so one file covers all four platforms.
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p assets
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir assets
+          cd assets && sha256sum ncmconv-* > ../checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: checksums.txt
