@@ -302,8 +302,10 @@ ln -sf "$PWD/skill/ncm-convert/SKILL.md" ~/.agents/skills/ncm-convert/SKILL.md
 
 The decryptor is not "probably right":
 
-- 17 real `.ncm` files were decrypted and compared against the established C++
-  reference implementation by hashing the decoded PCM: **17/17 identical**.
+- 18 real `.ncm` files were decrypted and compared against the established C++
+  reference implementation by hashing the decoded PCM: **18/18 identical**. That
+  set includes a 192 kHz / 24-bit FLAC container with cover art, where the
+  extracted cover also matches the reference byte for byte.
 - `cargo test` covers the container parser (metadata, cover frames, cover
   padding), the keystream against a pinned vector, the vectorised path against
   the scalar reference at every length, and an ffmpeg matrix for every target
@@ -313,9 +315,6 @@ The decryptor is not "probably right":
 
 ## Known limitations
 
-- The container parser is verified against 18 real MP3-payload files and against
-  a synthetic FLAC container. A real NetEase FLAC download has not been run
-  through it yet; the code path is identical, but the container bytes are not.
 - `-format` equal to the payload format copies unless `-tag` or `-force` is
   given; only `-force` re-encodes.
 - Lossy targets clamp anything above 48 kHz automatically; the rate cannot be
