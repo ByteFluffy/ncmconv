@@ -1,0 +1,22 @@
+[package]
+name = "ncmconv"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Decrypt NetEase Cloud Music .ncm files and convert them to open formats"
+license = "MIT"
+repository = "https://github.com/ByteFluffy/ncmconv"
+readme = "README.md"
+keywords = ["ncm", "netease", "decrypt", "audio", "converter"]
+categories = ["command-line-utilities", "multimedia::audio"]
+
+[dependencies]
+aes = "0.8"
+base64 = "0.22"
+serde_json = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
