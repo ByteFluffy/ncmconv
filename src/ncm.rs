@@ -352,10 +352,7 @@ fn xor_fast(dst: &mut [u8], src: &[u8], ks: &[u8; 320]) {
             let s1 = vld1q_u8(src.as_ptr().add(i + 16));
             let s2 = vld1q_u8(src.as_ptr().add(i + 32));
             let s3 = vld1q_u8(src.as_ptr().add(i + 48));
-            vst1q_u8(
-                dst.as_mut_ptr().add(i),
-                veorq_u8(s0, vld1q_u8(k)),
-            );
+            vst1q_u8(dst.as_mut_ptr().add(i), veorq_u8(s0, vld1q_u8(k)));
             vst1q_u8(
                 dst.as_mut_ptr().add(i + 16),
                 veorq_u8(s1, vld1q_u8(k.add(16))),
@@ -394,7 +391,10 @@ unsafe fn xor_avx2(dst: &mut [u8], src: &[u8], ks: &[u8; 320]) {
         let k = ks.as_ptr().add(i & 0xFF);
         let s = _mm256_loadu_si256(src.as_ptr().add(i) as *const __m256i);
         let key = _mm256_loadu_si256(k as *const __m256i);
-        _mm256_storeu_si256(dst.as_mut_ptr().add(i) as *mut __m256i, _mm256_xor_si256(s, key));
+        _mm256_storeu_si256(
+            dst.as_mut_ptr().add(i) as *mut __m256i,
+            _mm256_xor_si256(s, key),
+        );
         i += 32;
     }
     xor_scalar(&mut dst[i..len], &src[i..len], ks, i & 0xFF);
@@ -502,12 +502,7 @@ pub(crate) mod fixture {
         pub duration_ms: u64,
     }
 
-    pub fn build(
-        payload: &[u8],
-        meta: Option<Meta0>,
-        cover: &[u8],
-        cover_pad: usize,
-    ) -> Vec<u8> {
+    pub fn build(payload: &[u8], meta: Option<Meta0>, cover: &[u8], cover_pad: usize) -> Vec<u8> {
         let stream_key: Vec<u8> = (0..160).map(|i| ((i * 13 + 7) % 251) as u8).collect();
         let mut key_cipher = aes_ecb_encrypt(&CORE_KEY, &stream_key);
         for byte in key_cipher.iter_mut() {

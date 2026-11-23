@@ -61,7 +61,14 @@ pub fn ffmpeg_args(req: &Request) -> Vec<String> {
     args.push("-map".into());
     args.push("0:a:0".into());
     if cover {
-        for extra in ["-map", "1:v:0", "-c:v", "copy", "-disposition:v:0", "attached_pic"] {
+        for extra in [
+            "-map",
+            "1:v:0",
+            "-c:v",
+            "copy",
+            "-disposition:v:0",
+            "attached_pic",
+        ] {
             args.push(extra.into());
         }
     }
@@ -91,7 +98,14 @@ pub fn ffmpeg_args(req: &Request) -> Vec<String> {
         }
         "wav" => {
             args.push("-c:a".into());
-            args.push(if req.info.bits > 16 { "pcm_s24le" } else { "pcm_s16le" }.into());
+            args.push(
+                if req.info.bits > 16 {
+                    "pcm_s24le"
+                } else {
+                    "pcm_s16le"
+                }
+                .into(),
+            );
         }
         "flac" => {
             args.push("-c:a".into());

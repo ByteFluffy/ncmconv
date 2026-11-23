@@ -147,13 +147,12 @@ pub fn main() -> i32 {
     let tools = if options.format == "original" {
         None
     } else {
-        match (
-            which("ffmpeg"),
-            which("ffprobe"),
-        ) {
+        match (which("ffmpeg"), which("ffprobe")) {
             (Some(ffmpeg), Some(ffprobe)) => Some(Tools { ffmpeg, ffprobe }),
             _ => {
-                eprintln!("error: ffmpeg and ffprobe are required to change format (brew install ffmpeg)");
+                eprintln!(
+                    "error: ffmpeg and ffprobe are required to change format (brew install ffmpeg)"
+                );
                 return 2;
             }
         }
@@ -339,7 +338,11 @@ fn dump(decoder: &mut Decoder, output: &Path) -> std::io::Result<u64> {
 }
 
 fn stage(decoder: &mut Decoder, dir: &Path, from: &str) -> std::io::Result<PathBuf> {
-    let path = dir.join(format!(".ncmconv-{}.{}", std::process::id(), extension_for(from)));
+    let path = dir.join(format!(
+        ".ncmconv-{}.{}",
+        std::process::id(),
+        extension_for(from)
+    ));
     let mut file = std::fs::File::create(&path)?;
     match decoder.copy_to(&mut file) {
         Ok(_) => Ok(path),
@@ -406,7 +409,7 @@ fn walk(dir: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> Result<(), Str
     Ok(())
 }
 
-fn report(entries: &mut Vec<Entry>, options: &Options) -> Result<(), ()> {
+fn report(entries: &mut [Entry], options: &Options) -> Result<(), ()> {
     let mut converted = 0usize;
     let mut skipped = 0usize;
     let mut failed = 0usize;
@@ -618,12 +621,51 @@ mod tests {
         std::fs::read(&path).unwrap()
     }
 
+    /// A 192 kHz / 24-bit FLAC. NetEase ships hi-res payloads, and the two
+    /// branches that only such a payload reaches are the depth-preserving WAV
+    /// encode and the sample-rate clamp for lossy targets.
+    fn synth_hi_res(dir: &Path) -> Vec<u8> {
+        let path = dir.join("hires.flac");
+        let status = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=2",
+                "-ac",
+                "2",
+                "-ar",
+                "192000",
+                "-c:a",
+                "flac",
+                "-sample_fmt",
+                "s32",
+            ])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::read(&path).unwrap()
+    }
+
     fn cover_png(dir: &Path) -> Vec<u8> {
         let path = dir.join("cover.png");
         let status = Command::new("ffmpeg")
             .args([
-                "-hide_banner", "-v", "error", "-y", "-f", "lavfi", "-i",
-                "color=c=red:s=64x64:d=1", "-frames:v", "1",
+                "-hide_banner",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=64x64:d=1",
+                "-frames:v",
+                "1",
             ])
             .arg(&path)
             .status()
@@ -732,10 +774,41 @@ mod tests {
         ];
         for (format, source, codec) in cases {
             let out = temp_dir(&format!("matrix-{format}"));
-            let entry = process(source, &options(format, &out), Some(&tools), &fresh_claims());
+            let entry = process(
+                source,
+                &options(format, &out),
+                Some(&tools),
+                &fresh_claims(),
+            );
             assert!(entry.error.is_none(), "{format}: {:?}", entry.error);
             let info = transcode::probe(&tools.ffprobe, Path::new(&entry.output)).unwrap();
             assert_eq!(info.codec, codec, "{format}");
+        }
+    }
+
+    #[test]
+    fn hi_res_payload_keeps_depth_and_clamps_rate() {
+        if !has_ffmpeg() {
+            return;
+        }
+        let dir = temp_dir("hires");
+        let payload = synth_hi_res(&dir);
+        let ncm = write_ncm(&dir, "h.ncm", &payload, &[], 0);
+        let tools = tools();
+
+        let out = temp_dir("hires-wav");
+        let entry = process(&ncm, &options("wav", &out), Some(&tools), &fresh_claims());
+        assert!(entry.error.is_none(), "{:?}", entry.error);
+        let info = transcode::probe(&tools.ffprobe, Path::new(&entry.output)).unwrap();
+        assert_eq!(info.codec, "pcm_s24le", "24-bit depth must survive to WAV");
+        assert_eq!(info.sample_rate, 192_000, "WAV keeps the source rate");
+
+        for format in ["mp3", "m4a"] {
+            let out = temp_dir(&format!("hires-{format}"));
+            let entry = process(&ncm, &options(format, &out), Some(&tools), &fresh_claims());
+            assert!(entry.error.is_none(), "{format}: {:?}", entry.error);
+            let info = transcode::probe(&tools.ffprobe, Path::new(&entry.output)).unwrap();
+            assert_eq!(info.sample_rate, 48_000, "{format} clamps the rate");
         }
     }
 
@@ -755,8 +828,14 @@ mod tests {
         let ffprobe = which("ffprobe").unwrap();
         let output = Command::new(ffprobe)
             .args([
-                "-v", "error", "-select_streams", "v",
-                "-show_entries", "stream_disposition=attached_pic", "-of", "csv=p=0",
+                "-v",
+                "error",
+                "-select_streams",
+                "v",
+                "-show_entries",
+                "stream_disposition=attached_pic",
+                "-of",
+                "csv=p=0",
             ])
             .arg(&entry.output)
             .output()
