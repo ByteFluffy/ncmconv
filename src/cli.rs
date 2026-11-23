@@ -2,6 +2,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde_json::json;
@@ -282,7 +283,18 @@ fn process(
             return entry;
         }
     };
-    let info = transcode::probe(&tools.ffprobe, &staged).unwrap_or_default();
+    let info = match transcode::probe(&tools.ffprobe, &staged) {
+        Ok(info) => info,
+        Err(error) => {
+            // Falling back silently would quietly change the output (16-bit WAV,
+            // no sample-rate clamp), so say it out loud.
+            eprintln!(
+                "[warn] {}: {error} (using encoder defaults)",
+                file_name(source)
+            );
+            AudioInfo::default()
+        }
+    };
     entry.bit_rate = info.bit_rate;
     if let Some(warning) = warn_reencode(&from, &target, &info) {
         eprintln!("[warn] {}: {warning}", file_name(source));
@@ -337,12 +349,21 @@ fn dump(decoder: &mut Decoder, output: &Path) -> std::io::Result<u64> {
     }
 }
 
-fn stage(decoder: &mut Decoder, dir: &Path, from: &str) -> std::io::Result<PathBuf> {
-    let path = dir.join(format!(
-        ".ncmconv-{}.{}",
+/// Sequential suffix so parallel workers never stage onto the same path. The
+/// process id alone is not enough: every worker in this process shares it.
+static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn next_stage_path(dir: &Path, from: &str) -> PathBuf {
+    let seq = STAGE_SEQ.fetch_add(1, Ordering::Relaxed);
+    dir.join(format!(
+        ".ncmconv-{}-{seq}.{}",
         std::process::id(),
         extension_for(from)
-    ));
+    ))
+}
+
+fn stage(decoder: &mut Decoder, dir: &Path, from: &str) -> std::io::Result<PathBuf> {
+    let path = next_stage_path(dir, from);
     let mut file = std::fs::File::create(&path)?;
     match decoder.copy_to(&mut file) {
         Ok(_) => Ok(path),
@@ -850,6 +871,14 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+    }
+
+    #[test]
+    fn staged_paths_do_not_collide() {
+        let dir = temp_dir("stage");
+        let first = next_stage_path(&dir, "mp3");
+        let second = next_stage_path(&dir, "mp3");
+        assert_ne!(first, second, "parallel workers would corrupt each other");
     }
 
     #[test]
