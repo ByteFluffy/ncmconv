@@ -37,6 +37,8 @@ pub struct Options {
     pub tag: bool,
     /// Report what the container holds and exit without converting.
     pub info: bool,
+    /// Encode even when the payload is already in the target format.
+    pub force: bool,
     pub manifest: Option<PathBuf>,
     /// Flags the user actually set, so behaviour that ignores one can say so.
     explicit: HashSet<String>,
@@ -55,6 +57,7 @@ impl Default for Options {
             overwrite: false,
             tag: false,
             info: false,
+            force: false,
             manifest: None,
             explicit: HashSet::new(),
         }
@@ -273,9 +276,12 @@ fn process(
         .map(|m| !m.name.is_empty() || !m.artist.is_empty() || !m.album.is_empty())
         .unwrap_or(false)
         || !decoder.cover.is_empty();
-    let remux = options.tag && target == from && taggable;
+    // -force only makes sense with a concrete target: `-format original` means
+    // "leave the payload alone", which is already the copy path.
+    let must_encode = options.force && options.format != "original";
+    let remux = options.tag && target == from && taggable && !must_encode;
 
-    if target == from && !remux {
+    if target == from && !remux && !must_encode {
         if options.explicit.contains("b") {
             eprintln!(
                 "[note] {}: payload is already {target}, copied bit-exactly; -b ignored",
@@ -675,6 +681,7 @@ fn parse_args(argv: &[String]) -> Result<(Options, Vec<String>), String> {
             "overwrite" => options.overwrite = true,
             "tag" => options.tag = true,
             "info" => options.info = true,
+            "force" => options.force = true,
             other => {
                 return Err(format!(
                     "unknown flag -{other} (try -h for the list of flags)"
@@ -709,6 +716,7 @@ Options:
   -overwrite      replace existing output files
   -tag            attach tags and cover art without re-encoding (remux)
   -info           print what each container holds, convert nothing
+  -force          encode even when the payload already matches the target
   -manifest PATH  also write a JSON manifest
   -version        print version
 
@@ -1138,6 +1146,42 @@ mod tests {
             assert!(entry.error.is_none(), "{:?}", entry.error);
             assert_eq!(entry.to, "mp3");
         }
+    }
+
+    #[test]
+    fn force_reencodes_a_matching_payload() {
+        if !has_ffmpeg() {
+            return;
+        }
+        let dir = temp_dir("force");
+        let mp3 = synth(&dir, "mp3");
+        let ncm = write_ncm(&dir, "f.ncm", &mp3, &[], 0);
+
+        let plain = process(
+            &ncm,
+            &options("mp3", &temp_dir("force-copy")),
+            Some(&tools()),
+            &fresh_claims(),
+        );
+        assert!(plain.error.is_none(), "{:?}", plain.error);
+
+        let mut forced_options = options("mp3", &temp_dir("force-encode"));
+        forced_options.force = true;
+        forced_options.bitrate = "64k".into();
+        let forced = process(&ncm, &forced_options, Some(&tools()), &fresh_claims());
+        assert!(forced.error.is_none(), "{:?}", forced.error);
+
+        assert_ne!(
+            std::fs::read(&plain.output).unwrap(),
+            std::fs::read(&forced.output).unwrap(),
+            "-force must actually encode"
+        );
+        let info = transcode::probe(&tools().ffprobe, Path::new(&forced.output)).unwrap();
+        assert!(
+            info.bit_rate < 100_000,
+            "expected a 64k encode, got {} bps",
+            info.bit_rate
+        );
     }
 
     #[test]

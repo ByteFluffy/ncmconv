@@ -30,6 +30,20 @@ differs. `mp4` exists because players and upload forms ask for it by name.
 
 ## Install
 
+One line, verified against the release checksum:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ByteFluffy/ncmconv/main/install.sh | sh
+```
+
+Homebrew:
+
+```sh
+brew install ByteFluffy/tap/ncmconv
+```
+
+From source:
+
 ```sh
 cargo install --git https://github.com/ByteFluffy/ncmconv
 ```
@@ -72,6 +86,7 @@ ncmconv [options] <file-or-dir>...
 | `-overwrite` | off | replace existing outputs (otherwise skip) |
 | `-tag` | off | rewrite the container to attach tags and cover art, audio copied as-is |
 | `-info` | off | print what each container holds and convert nothing |
+| `-force` | off | encode even when the payload already matches the target |
 | `-manifest PATH` | none | also write a JSON manifest |
 | `-version` | | print version |
 
@@ -294,8 +309,8 @@ The decryptor is not "probably right":
 - The container parser is verified against 18 real MP3-payload files and against
   a synthetic FLAC container. A real NetEase FLAC download has not been run
   through it yet; the code path is identical, but the container bytes are not.
-- `-format` equal to the payload format copies unless `-tag` is given, so there
-  is still no way to force a re-encode at a different bitrate.
+- `-format` equal to the payload format copies unless `-tag` or `-force` is
+  given; only `-force` re-encodes.
 - Lossy targets clamp anything above 48 kHz automatically; the rate cannot be
   set explicitly.
 - Release binaries are unsigned, so macOS Gatekeeper quarantines the download.
