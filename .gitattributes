@@ -1,0 +1,6 @@
+# Keep the diff honest across platforms.
+* text=auto eol=lf
+
+# Make sure the languages bar reflects the sources rather than the tooling.
+*.rs linguist-detectable=true linguist-language=Rust
+*.sh linguist-language=Shell
