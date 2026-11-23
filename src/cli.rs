@@ -590,6 +590,15 @@ mod tests {
         dir
     }
 
+    /// A payload with the right magic and arbitrary content. Tests that only
+    /// exercise the container path need no real audio, so they stay runnable on
+    /// machines without ffmpeg.
+    fn fake_payload(magic: &[u8]) -> Vec<u8> {
+        let mut payload = magic.to_vec();
+        payload.extend((0..4096).map(|i| (i % 251) as u8));
+        payload
+    }
+
     /// Synthesises a real 2-second file so the encoder paths see genuine media.
     fn synth(dir: &Path, ext: &str) -> Vec<u8> {
         let path = dir.join(format!("fixture.{ext}"));
@@ -709,7 +718,7 @@ mod tests {
     #[test]
     fn original_export_is_byte_exact() {
         let dir = temp_dir("exact");
-        let flac = synth(&dir, "flac");
+        let flac = fake_payload(b"fLaC\x00\x00\x00\x22");
         let ncm = write_ncm(&dir, "a.ncm", &flac, &[], 0);
         let out = temp_dir("exact-out");
 
@@ -723,7 +732,7 @@ mod tests {
     #[test]
     fn second_run_skips_unless_overwrite() {
         let dir = temp_dir("skip");
-        let flac = synth(&dir, "flac");
+        let flac = fake_payload(b"ID3\x03\x00\x00\x00\x00\x00\x00");
         let ncm = write_ncm(&dir, "a.ncm", &flac, &[], 0);
         let out = temp_dir("skip-out");
 
@@ -741,7 +750,7 @@ mod tests {
     #[test]
     fn cover_padding_is_skipped() {
         let dir = temp_dir("pad");
-        let flac = synth(&dir, "flac");
+        let flac = fake_payload(b"fLaC\x00\x00\x00\x22");
         // Cover frame declares more bytes than the image it carries.
         let ncm = write_ncm(&dir, "a.ncm", &flac, &[], 37);
         let out = temp_dir("pad-out");
