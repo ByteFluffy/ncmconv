@@ -39,11 +39,15 @@ One line, verified against the release checksum:
 curl -fsSL https://raw.githubusercontent.com/ByteFluffy/ncmconv/main/install.sh | sh
 ```
 
-Homebrew:
+Homebrew. The formula lives in this repository, so the tap points at it:
 
 ```sh
-brew install ByteFluffy/tap/ncmconv
+brew tap ByteFluffy/ncmconv https://github.com/ByteFluffy/ncmconv
+brew install ByteFluffy/ncmconv/ncmconv
 ```
+
+`scripts/update-formula.sh v0.x.y` refreshes `Formula/ncmconv.rb` from a
+release's `checksums.txt`, so the formula never drifts behind the binaries.
 
 With a Rust toolchain:
 
