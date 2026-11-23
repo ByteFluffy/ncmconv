@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-14
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd "target/${{ matrix.target }}/release"
+          tar -czf "$GITHUB_WORKSPACE/ncmconv-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" ncmconv
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/ncmconv.exe" `
+            -DestinationPath "ncmconv-$env:GITHUB_REF_NAME-${{ matrix.target }}.zip"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ncmconv-*.tar.gz
+            ncmconv-*.zip

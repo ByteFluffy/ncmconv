@@ -124,6 +124,17 @@ one 5:51 track costs
 So `m4a`/`mp4` are the slow targets because of ffmpeg's default AAC encoder,
 not because of this tool. `-j` parallelises across files.
 
+## Agent skill
+
+The repository ships the skill that wraps this CLI at
+[`skill/ncm-convert/SKILL.md`](skill/ncm-convert/SKILL.md). Link it where your
+agent runtime looks for skills so the instructions stay in one place:
+
+```sh
+mkdir -p ~/.agents/skills/ncm-convert
+ln -sf "$PWD/skill/ncm-convert/SKILL.md" ~/.agents/skills/ncm-convert/SKILL.md
+```
+
 ## Verification
 
 The decryptor is not "probably right":
