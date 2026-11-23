@@ -513,10 +513,17 @@ fn parse_args(argv: &[String]) -> Result<(Options, Vec<String>), String> {
     let mut inputs = Vec::new();
     let mut index = 0;
 
+    let mut only_inputs = false;
     while index < argv.len() {
         let arg = &argv[index];
         index += 1;
-        if !arg.starts_with('-') || arg == "-" {
+        // Everything after `--` is a path, so files whose names start with a
+        // dash remain reachable.
+        if arg == "--" {
+            only_inputs = true;
+            continue;
+        }
+        if only_inputs || !arg.starts_with('-') || arg == "-" {
             inputs.push(arg.clone());
             continue;
         }
@@ -553,7 +560,11 @@ fn parse_args(argv: &[String]) -> Result<(Options, Vec<String>), String> {
             }
             "r" | "recursive" => options.recursive = true,
             "overwrite" => options.overwrite = true,
-            other => return Err(format!("unknown flag -{other}")),
+            other => {
+                return Err(format!(
+                    "unknown flag -{other} (try -h for the list of flags)"
+                ))
+            }
         }
     }
 
@@ -871,6 +882,13 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+    }
+
+    #[test]
+    fn double_dash_ends_flag_parsing() {
+        let (_, inputs) = parse_args(&["-j".into(), "2".into(), "--".into(), "-weird.ncm".into()])
+            .expect("-- must stop flag parsing");
+        assert_eq!(inputs, vec!["-weird.ncm".to_string()]);
     }
 
     #[test]
