@@ -1,3 +1,6 @@
+[![crates.io](https://img.shields.io/crates/v/ncmconv.svg)](https://crates.io/crates/ncmconv)
+[![CI](https://github.com/ByteFluffy/ncmconv/actions/workflows/ci.yml/badge.svg)](https://github.com/ByteFluffy/ncmconv/actions/workflows/ci.yml)
+
 # ncmconv
 
 Decrypt NetEase Cloud Music `.ncm` files and convert them to open formats.
@@ -42,10 +45,10 @@ Homebrew:
 brew install ByteFluffy/tap/ncmconv
 ```
 
-From source:
+With a Rust toolchain:
 
 ```sh
-cargo install --git https://github.com/ByteFluffy/ncmconv
+cargo install ncmconv
 ```
 
 Or from a checkout:
