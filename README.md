@@ -79,11 +79,106 @@ Behaviour that is guaranteed, not incidental:
 
 ## Architecture
 
+Four modules, one direction of dependency. The middle two are the whole tool:
+
+| Module | Job |
+|---|---|
+| `src/main.rs` | exit code only |
+| `src/cli.rs` | argument parsing, work queue, progress, manifest |
+| `src/ncm.rs` | header parse, AES-128-ECB key unwrap, key schedule, SIMD XOR |
+| `src/transcode.rs` | ffmpeg/ffprobe invocation; exists only when a format changes |
+
+```mermaid
+flowchart TB
+    subgraph CLI["cli.rs — command surface"]
+        Args["parse arguments / exit codes"]
+        Pool["worker pool (-j)"]
+        Manifest["JSON manifest"]
+        Args --> Pool
+        Pool --> Manifest
+    end
+
+    subgraph Container["ncm.rs — container layer, always"]
+        Header["parse header"]
+        Aes["unwrap stream key<br/>AES-128-ECB"]
+        KeyBox["key schedule<br/>→ 256-byte period"]
+        Xor["SIMD XOR<br/>NEON / AVX2"]
+        Header --> Aes --> KeyBox --> Xor
+    end
+
+    subgraph Codec["transcode.rs — only when the format changes"]
+        Probe["ffprobe<br/>depth / rate"]
+        Encode["ffmpeg encode"]
+        Probe --> Encode
+    end
+
+    Payload[("payload bytes")]
+    Output[("output file")]
+
+    Pool -->|"each file"| Header
+    Xor --> Payload
+    Payload -->|"same format"| Output
+    Payload -->|"different format"| Probe
+    Encode --> Output
 ```
-src/main.rs        exit code only
-src/cli.rs         argument parsing, work queue, progress, manifest, exit codes
-src/ncm.rs         header parse, AES-128-ECB key unwrap, key schedule, SIMD XOR
-src/transcode.rs   ffmpeg/ffprobe invocation; exists only when a format changes
+
+### Which path a file takes
+
+The only real decision in the tool is whether the payload needs an encoder at
+all. Same container means a byte copy; anything else means ffmpeg.
+
+```mermaid
+flowchart TD
+    In["input .ncm"] --> Magic{"magic and header valid?"}
+    Magic -->|"no"| Fail["error, exit 1"]
+    Magic -->|"yes"| Decrypt["decrypt payload"]
+    Decrypt --> Detect{"payload container"}
+    Detect --> Requested{"requested format"}
+    Requested -->|"original"| Target1["target = payload format"]
+    Requested -->|"explicit"| Target2["target = requested format"]
+    Target1 --> Same{"target equals payload?"}
+    Target2 --> Same
+    Same -->|"yes"| Copy["bit-exact copy<br/>no encoder involved"]
+    Same -->|"no"| Probed{"ffprobe readable?"}
+    Probed -->|"no"| Warn["warn, use encoder defaults"]
+    Probed -->|"yes"| Use["take depth and sample rate"]
+    Warn --> Encode["ffmpeg encode"]
+    Use --> Encode
+    Copy --> Done["output file"]
+    Encode --> Done
+```
+
+### One conversion, end to end
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant CLI as cli.rs
+    participant Pool as worker pool
+    participant NCM as ncm.rs
+    participant Disk as filesystem
+    participant FF as ffmpeg
+
+    User->>CLI: ncmconv -format mp3 -o out dir/
+    CLI->>Disk: scan the inputs for .ncm
+    CLI->>Pool: enqueue every file
+    loop per file, up to -j at a time
+        Pool->>NCM: open and parse header
+        NCM->>NCM: unwrap key, build 256-byte period
+        NCM-->>Pool: payload format, metadata, cover
+        alt target equals payload format
+            Pool->>Disk: write payload byte for byte
+        else target differs
+            Pool->>Disk: stage decrypted temp file
+            Pool->>FF: ffprobe depth and rate
+            FF-->>Pool: codec, bit depth, sample rate
+            Pool->>FF: encode with metadata and cover
+            FF->>Disk: output file
+            Pool->>Disk: remove temp file
+        end
+    end
+    CLI->>Disk: write manifest when asked
+    CLI-->>User: summary and exit code
 ```
 
 Two invariants hold the design together:
